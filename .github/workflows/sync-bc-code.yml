@@ -39,17 +39,35 @@ jobs:
       - name: Fetch latest GB version from source repo
         id: latest
         run: |
-          # Get all branches from source repo (increase per_page and handle pagination)
+          # Get all branches from source repo
           echo "Fetching branches from source repository..."
           BRANCHES=$(curl -s "https://api.github.com/repos/StefanMaron/MSDyn365BC.Code.History/branches?per_page=100")
           
+          # Debug: Check API response
+          echo "API Response (first 500 chars):"
+          echo "$BRANCHES" | head -c 500
+          echo ""
+          echo "---"
+          
+          # Debug: Check if jq can parse it
+          echo "Branch count: $(echo "$BRANCHES" | jq '. | length' 2>/dev/null || echo "jq parse failed")"
+          
+          # Debug: Show first 5 branch names
+          echo "First 5 branches:"
+          echo "$BRANCHES" | jq -r '.[].name' 2>/dev/null | head -5 || echo "Failed to extract branch names"
+          
           # Debug: Show all gb-* branches found
-          echo "GB branches found:"
-          echo "$BRANCHES" | jq -r '.[].name' | grep '^gb-' || echo "No gb- branches found"
+          echo "All GB branches found:"
+          ALL_GB_BRANCHES=$(echo "$BRANCHES" | jq -r '.[].name' 2>/dev/null | grep '^gb-' || echo "")
+          if [ -z "$ALL_GB_BRANCHES" ]; then
+            echo "No gb- branches found"
+          else
+            echo "$ALL_GB_BRANCHES"
+          fi
           
           # Extract gb-* branches and find highest version
           # Filter for gb-* pattern, remove 'gb-' prefix, sort numerically, take highest
-          LATEST_VERSION=$(echo "$BRANCHES" | jq -r '.[].name' | grep '^gb-[0-9]\+$' | sed 's/gb-//' | sort -n | tail -1)
+          LATEST_VERSION=$(echo "$BRANCHES" | jq -r '.[].name' 2>/dev/null | grep '^gb-[0-9]\+$' | sed 's/gb-//' | sort -n | tail -1)
           
           # Verify we got a valid version number
           if [ -z "$LATEST_VERSION" ]; then
