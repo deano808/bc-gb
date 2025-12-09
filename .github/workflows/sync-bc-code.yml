@@ -1,0 +1,133 @@
+name: Sync BC GB Code
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Get current version
+        id: current
+        run: |
+          if [ -f .bc-version ]; then
+            CURRENT_VERSION=$(cat .bc-version)
+            echo "Current version: $CURRENT_VERSION"
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "No version file found, will sync latest"
+            echo "version=gb-0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Fetch latest GB version from source repo
+        id: latest
+        run: |
+          # Get all branches from source repo
+          BRANCHES=$(curl -s "https://api.github.com/repos/StefanMaron/MSDyn365BC.Code.History/branches?per_page=100")
+          
+          # Extract gb-* branches and find highest version
+          LATEST_VERSION=$(echo "$BRANCHES" | jq -r '.[].name' | grep '^gb-' | sed 's/gb-//' | sort -n | tail -1)
+          LATEST_BRANCH="gb-$LATEST_VERSION"
+          
+          echo "Latest version: $LATEST_BRANCH"
+          echo "branch=$LATEST_BRANCH" >> $GITHUB_OUTPUT
+          echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Check if update needed
+        id: check
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.latest.outputs.branch }}"
+          
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "Already up to date with $LATEST"
+            echo "update_needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Update needed: $CURRENT -> $LATEST"
+            echo "update_needed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Add source repository as remote
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          git remote add source https://github.com/StefanMaron/MSDyn365BC.Code.History.git || true
+          git remote set-url source https://github.com/StefanMaron/MSDyn365BC.Code.History.git
+      
+      - name: Fetch and sync latest version
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          BRANCH="${{ steps.latest.outputs.branch }}"
+          echo "Fetching $BRANCH from source repository..."
+          
+          # Fetch only the specific branch with shallow history
+          git fetch source $BRANCH --depth=1
+          
+          # Remove all files except .git, .github, .bc-version, and README.md
+          find . -maxdepth 1 ! -name '.git' ! -name '.github' ! -name '.bc-version' ! -name 'README.md' ! -name '.' -exec rm -rf {} +
+          
+          # Checkout files from the source branch
+          git checkout source/$BRANCH -- . || true
+          
+          # Restore our workflow files and metadata
+          git checkout HEAD -- .github/ .bc-version README.md 2>/dev/null || true
+      
+      - name: Update version file
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          echo "${{ steps.latest.outputs.branch }}" > .bc-version
+          git add .bc-version
+      
+      - name: Commit and push changes
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          git add -A
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            BRANCH="${{ steps.latest.outputs.branch }}"
+            git commit -m "Sync to Business Central $BRANCH
+
+Automated sync from StefanMaron/MSDyn365BC.Code.History
+Source branch: $BRANCH
+Sync date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+            
+            git push origin main
+            echo "Successfully synced to $BRANCH"
+          fi
+      
+      - name: Create release tag
+        if: steps.check.outputs.update_needed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ steps.latest.outputs.branch }}"
+          TAG_NAME="sync-$BRANCH-$(date +%Y%m%d)"
+          
+          git tag -a "$TAG_NAME" -m "Business Central $BRANCH code sync"
+          git push origin "$TAG_NAME" || echo "Tag already exists or push failed"
+      
+      - name: Summary
+        run: |
+          if [ "${{ steps.check.outputs.update_needed }}" = "true" ]; then
+            echo "✅ Successfully synced to ${{ steps.latest.outputs.branch }}"
+          else
+            echo "ℹ️ Already up to date with ${{ steps.current.outputs.version }}"
+          fi
