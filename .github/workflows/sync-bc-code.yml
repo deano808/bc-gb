@@ -35,6 +35,15 @@ jobs:
             echo "No version file found, will sync latest"
             echo "version=gb-0" >> $GITHUB_OUTPUT
           fi
+          
+          # Get current commit SHA if we have a version file
+          if [ -f .bc-version ] && [ "$CURRENT_VERSION" != "gb-0" ]; then
+            CURRENT_SHA=$(git ls-remote https://github.com/StefanMaron/MSDyn365BC.Code.History.git "refs/heads/$CURRENT_VERSION" | awk '{print $1}')
+            echo "Current SHA: $CURRENT_SHA"
+            echo "sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
+          else
+            echo "sha=" >> $GITHUB_OUTPUT
+          fi
       
       - name: Fetch latest GB version from source repo
         id: latest
@@ -42,43 +51,56 @@ jobs:
           # Use git ls-remote to efficiently get only gb- branches
           echo "Fetching GB branches from source repository..."
           
-          # Get all gb- branches using git ls-remote (much more efficient than API pagination)
-          GB_BRANCHES=$(git ls-remote --heads https://github.com/StefanMaron/MSDyn365BC.Code.History.git 'refs/heads/gb-*' | awk '{print $2}' | sed 's|refs/heads/||')
+          # Get all gb- branches with their SHAs using git ls-remote
+          GB_BRANCHES_WITH_SHA=$(git ls-remote --heads https://github.com/StefanMaron/MSDyn365BC.Code.History.git 'refs/heads/gb-*')
           
           # Debug: Show all gb-* branches found
           echo "All GB branches found:"
-          if [ -z "$GB_BRANCHES" ]; then
+          if [ -z "$GB_BRANCHES_WITH_SHA" ]; then
             echo "No gb- branches found"
+            exit 1
           else
-            echo "$GB_BRANCHES" | sort
+            echo "$GB_BRANCHES_WITH_SHA" | sed 's|refs/heads/||' | sort -t- -k2 -n
           fi
           
           # Extract version numbers and find highest
-          LATEST_VERSION=$(echo "$GB_BRANCHES" | grep '^gb-[0-9]\+$' | sed 's/gb-//' | sort -n | tail -1)
+          LATEST_BRANCH=$(echo "$GB_BRANCHES_WITH_SHA" | awk '{print $2}' | sed 's|refs/heads/||' | grep '^gb-[0-9]\+$' | sed 's/gb-//' | sort -n | tail -1 | xargs -I {} echo "gb-{}")
           
-          # Verify we got a valid version number
-          if [ -z "$LATEST_VERSION" ]; then
+          # Verify we got a valid version
+          if [ -z "$LATEST_BRANCH" ]; then
             echo "Error: Could not find any gb-* branches with numeric versions"
             exit 1
           fi
           
-          LATEST_BRANCH="gb-$LATEST_VERSION"
+          # Get the SHA for the latest branch
+          LATEST_SHA=$(echo "$GB_BRANCHES_WITH_SHA" | grep "refs/heads/$LATEST_BRANCH" | awk '{print $1}')
           
           echo "Latest version: $LATEST_BRANCH"
+          echo "Latest SHA: $LATEST_SHA"
           echo "branch=$LATEST_BRANCH" >> $GITHUB_OUTPUT
-          echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "sha=$LATEST_SHA" >> $GITHUB_OUTPUT
       
       - name: Check if update needed
         id: check
         run: |
-          CURRENT="${{ steps.current.outputs.version }}"
-          LATEST="${{ steps.latest.outputs.branch }}"
+          CURRENT_VERSION="${{ steps.current.outputs.version }}"
+          CURRENT_SHA="${{ steps.current.outputs.sha }}"
+          LATEST_VERSION="${{ steps.latest.outputs.branch }}"
+          LATEST_SHA="${{ steps.latest.outputs.sha }}"
           
-          if [ "$CURRENT" = "$LATEST" ]; then
-            echo "Already up to date with $LATEST"
+          echo "Current: $CURRENT_VERSION (SHA: $CURRENT_SHA)"
+          echo "Latest:  $LATEST_VERSION (SHA: $LATEST_SHA)"
+          
+          # Check if version changed OR if SHA changed (content update)
+          if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ] && [ "$CURRENT_SHA" = "$LATEST_SHA" ] && [ -n "$CURRENT_SHA" ]; then
+            echo "✓ Already up to date with $LATEST_VERSION"
             echo "update_needed=false" >> $GITHUB_OUTPUT
           else
-            echo "Update needed: $CURRENT -> $LATEST"
+            if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
+              echo "→ Version changed: $CURRENT_VERSION -> $LATEST_VERSION"
+            else
+              echo "→ Content updated in $LATEST_VERSION"
+            fi
             echo "update_needed=true" >> $GITHUB_OUTPUT
           fi
       
