@@ -39,11 +39,25 @@ jobs:
       - name: Fetch latest GB version from source repo
         id: latest
         run: |
-          # Get all branches from source repo
+          # Get all branches from source repo (increase per_page and handle pagination)
+          echo "Fetching branches from source repository..."
           BRANCHES=$(curl -s "https://api.github.com/repos/StefanMaron/MSDyn365BC.Code.History/branches?per_page=100")
           
+          # Debug: Show all gb-* branches found
+          echo "GB branches found:"
+          echo "$BRANCHES" | jq -r '.[].name' | grep '^gb-' || echo "No gb- branches found"
+          
           # Extract gb-* branches and find highest version
-          LATEST_VERSION=$(echo "$BRANCHES" | jq -r '.[].name' | grep '^gb-' | sed 's/gb-//' | sort -n | tail -1)
+          # Filter for gb-* pattern, remove 'gb-' prefix, sort numerically, take highest
+          LATEST_VERSION=$(echo "$BRANCHES" | jq -r '.[].name' | grep '^gb-[0-9]\+$' | sed 's/gb-//' | sort -n | tail -1)
+          
+          # Verify we got a valid version number
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "Error: Could not find any gb-* branches with numeric versions"
+            echo "This might be due to API rate limiting or repository structure changes"
+            exit 1
+          fi
+          
           LATEST_BRANCH="gb-$LATEST_VERSION"
           
           echo "Latest version: $LATEST_BRANCH"
