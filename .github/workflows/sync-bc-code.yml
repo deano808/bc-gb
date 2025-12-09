@@ -103,11 +103,10 @@ jobs:
             echo "No changes to commit"
           else
             BRANCH="${{ steps.latest.outputs.branch }}"
-            git commit -m "Sync to Business Central $BRANCH
-
-Automated sync from StefanMaron/MSDyn365BC.Code.History
-Source branch: $BRANCH
-Sync date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+            git commit -m "Sync to Business Central $BRANCH" \
+                       -m "Automated sync from StefanMaron/MSDyn365BC.Code.History" \
+                       -m "Source branch: $BRANCH" \
+                       -m "Sync date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
             
             git push origin main
             echo "Successfully synced to $BRANCH"
